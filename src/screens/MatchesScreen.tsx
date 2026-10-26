@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { FilterTabs } from '../components/FilterTabs';
 import { MatchCard } from '../components/MatchCard';
+import { SearchBar } from '../components/SearchBar';
 import { UpdatedAgo } from '../components/UpdatedAgo';
 import { MATCHES_URL } from '../config';
 import { useFavorites } from '../hooks/useFavorites';
@@ -23,6 +24,7 @@ export function MatchesScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   const { isFavorite, toggle } = useFavorites();
 
@@ -59,21 +61,33 @@ export function MatchesScreen() {
     loadMatches();
   }, [loadMatches]);
 
-  // Фильтрация матчей:
-  // - 'all': все матчи тура
-  // - 'finished': завершённые (status === 'finished')
-  // - 'upcoming': запланированные, текущие (live) и перенесённые (postponed)
+  // Фильтрация матчей по статусу и поисковому запросу:
   const filteredMatches = useMemo(() => {
-    if (activeFilter === 'finished') {
-      return matches.filter((m) => m.status === 'finished');
-    }
-    if (activeFilter === 'upcoming') {
-      return matches.filter((m) => m.status !== 'finished');
-    }
-    return matches;
-  }, [matches, activeFilter]);
+    let result = matches;
 
-  // Количество для вкладок фильтра
+    // Фильтр по статусу
+    if (activeFilter === 'finished') {
+      result = result.filter((m) => m.status === 'finished');
+    } else if (activeFilter === 'upcoming') {
+      result = result.filter((m) => m.status !== 'finished');
+    }
+
+    // Поиск по названию клуба или городу
+    const query = searchQuery.trim().toLowerCase();
+    if (query) {
+      result = result.filter(
+        (m) =>
+          m.home.name.toLowerCase().includes(query) ||
+          m.away.name.toLowerCase().includes(query) ||
+          m.home.city.toLowerCase().includes(query) ||
+          m.away.city.toLowerCase().includes(query)
+      );
+    }
+
+    return result;
+  }, [matches, activeFilter, searchQuery]);
+
+  // Количество для вкладок фильтра (без учёта поиска, чтобы видеть общий объём)
   const filterCounts = useMemo(() => {
     const finished = matches.filter((m) => m.status === 'finished').length;
     const upcoming = matches.length - finished;
@@ -85,6 +99,9 @@ export function MatchesScreen() {
   }, [matches]);
 
   const getEmptyMessage = () => {
+    if (searchQuery.trim()) {
+      return `По запросу «${searchQuery.trim()}» ничего не найдено`;
+    }
     if (activeFilter === 'finished') {
       return 'Нет завершённых матчей';
     }
@@ -120,6 +137,22 @@ export function MatchesScreen() {
         </View>
       </View>
 
+      {/* Поиск и фильтры над списком */}
+      {!isLoading && !errorMessage && (
+        <View style={styles.controlsContainer}>
+          <SearchBar
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onClear={() => setSearchQuery('')}
+          />
+          <FilterTabs
+            activeFilter={activeFilter}
+            onChangeFilter={setActiveFilter}
+            counts={filterCounts}
+          />
+        </View>
+      )}
+
       {/* Состояние первичной загрузки */}
       {isLoading && (
         <View style={styles.centerContainer}>
@@ -145,41 +178,33 @@ export function MatchesScreen() {
         </View>
       )}
 
-      {/* Список с фильтром */}
+      {/* Список матчей */}
       {!isLoading && !errorMessage && (
-        <>
-          <FilterTabs
-            activeFilter={activeFilter}
-            onChangeFilter={setActiveFilter}
-            counts={filterCounts}
-          />
-
-          <FlatList
-            data={filteredMatches}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <MatchCard
-                match={item}
-                isFavorite={isFavorite(item.id)}
-                onToggleFavorite={toggle}
-              />
-            )}
-            contentContainerStyle={styles.listContent}
-            refreshControl={
-              <RefreshControl
-                refreshing={isRefreshing}
-                onRefresh={() => loadMatches(true)}
-                colors={['#2563eb']}
-                tintColor="#2563eb"
-              />
-            }
-            ListEmptyComponent={
-              <View style={styles.centerContainer}>
-                <Text style={styles.stateText}>{getEmptyMessage()}</Text>
-              </View>
-            }
-          />
-        </>
+        <FlatList
+          data={filteredMatches}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => (
+            <MatchCard
+              match={item}
+              isFavorite={isFavorite(item.id)}
+              onToggleFavorite={toggle}
+            />
+          )}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={() => loadMatches(true)}
+              colors={['#2563eb']}
+              tintColor="#2563eb"
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.centerContainer}>
+              <Text style={styles.stateText}>{getEmptyMessage()}</Text>
+            </View>
+          }
+        />
       )}
     </View>
   );
@@ -196,7 +221,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     paddingTop: 8,
-    paddingBottom: 14,
+    paddingBottom: 12,
   },
   title: {
     fontSize: 26,
@@ -227,6 +252,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#374151',
+  },
+  controlsContainer: {
+    marginBottom: 4,
   },
   listContent: {
     paddingBottom: 24,
