@@ -1,29 +1,37 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { FilterTabs } from '../components/FilterTabs';
 import { MatchCard } from '../components/MatchCard';
 import { UpdatedAgo } from '../components/UpdatedAgo';
 import { MATCHES_URL } from '../config';
 import { useFavorites } from '../hooks/useFavorites';
-import { Match, MatchesResponse } from '../types/match';
+import { FilterType, Match, MatchesResponse } from '../types/match';
 
 export function MatchesScreen() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [round, setRound] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
 
   const { isFavorite, toggle } = useFavorites();
 
-  const loadMatches = useCallback(async () => {
-    setIsLoading(true);
+  const loadMatches = useCallback(async (isPullToRefresh = false) => {
+    if (isPullToRefresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
     setErrorMessage(null);
 
     try {
@@ -43,6 +51,7 @@ export function MatchesScreen() {
       );
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   }, []);
 
@@ -50,25 +59,68 @@ export function MatchesScreen() {
     loadMatches();
   }, [loadMatches]);
 
+  // Фильтрация матчей:
+  // - 'all': все матчи тура
+  // - 'finished': завершённые (status === 'finished')
+  // - 'upcoming': запланированные, текущие (live) и перенесённые (postponed)
+  const filteredMatches = useMemo(() => {
+    if (activeFilter === 'finished') {
+      return matches.filter((m) => m.status === 'finished');
+    }
+    if (activeFilter === 'upcoming') {
+      return matches.filter((m) => m.status !== 'finished');
+    }
+    return matches;
+  }, [matches, activeFilter]);
+
+  // Количество для вкладок фильтра
+  const filterCounts = useMemo(() => {
+    const finished = matches.filter((m) => m.status === 'finished').length;
+    const upcoming = matches.length - finished;
+    return {
+      all: matches.length,
+      upcoming,
+      finished,
+    };
+  }, [matches]);
+
+  const getEmptyMessage = () => {
+    if (activeFilter === 'finished') {
+      return 'Нет завершённых матчей';
+    }
+    if (activeFilter === 'upcoming') {
+      return 'Нет предстоящих матчей';
+    }
+    return 'Матчи не найдены';
+  };
+
   return (
     <View style={styles.container}>
       {/* Шапка */}
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Матчи тура</Text>
-          {round !== null && (
-            <Text style={styles.subtitle}>Тур {round}</Text>
-          )}
+          {round !== null && <Text style={styles.subtitle}>Тур {round}</Text>}
         </View>
 
-        {lastUpdated && (
-          <View style={styles.metaContainer}>
-            <UpdatedAgo since={lastUpdated} />
-          </View>
-        )}
+        <View style={styles.headerRight}>
+          {lastUpdated && <UpdatedAgo since={lastUpdated} />}
+          <Pressable
+            style={({ pressed }) => [
+              styles.refreshHeaderButton,
+              pressed && styles.refreshHeaderButtonPressed,
+            ]}
+            onPress={() => loadMatches(false)}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Обновить данные"
+          >
+            <Text style={styles.refreshHeaderText}>↻ Обновить</Text>
+          </Pressable>
+        </View>
       </View>
 
-      {/* Состояние загрузки */}
+      {/* Состояние первичной загрузки */}
       {isLoading && (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#2563eb" />
@@ -86,32 +138,48 @@ export function MatchesScreen() {
               styles.retryButton,
               pressed && styles.retryButtonPressed,
             ]}
-            onPress={loadMatches}
+            onPress={() => loadMatches(false)}
           >
             <Text style={styles.retryButtonText}>Повторить</Text>
           </Pressable>
         </View>
       )}
 
-      {/* Список матчей */}
+      {/* Список с фильтром */}
       {!isLoading && !errorMessage && (
-        <FlatList
-          data={matches}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <MatchCard
-              match={item}
-              isFavorite={isFavorite(item.id)}
-              onToggleFavorite={toggle}
-            />
-          )}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.centerContainer}>
-              <Text style={styles.stateText}>Матчи не найдены</Text>
-            </View>
-          }
-        />
+        <>
+          <FilterTabs
+            activeFilter={activeFilter}
+            onChangeFilter={setActiveFilter}
+            counts={filterCounts}
+          />
+
+          <FlatList
+            data={filteredMatches}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <MatchCard
+                match={item}
+                isFavorite={isFavorite(item.id)}
+                onToggleFavorite={toggle}
+              />
+            )}
+            contentContainerStyle={styles.listContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={isRefreshing}
+                onRefresh={() => loadMatches(true)}
+                colors={['#2563eb']}
+                tintColor="#2563eb"
+              />
+            }
+            ListEmptyComponent={
+              <View style={styles.centerContainer}>
+                <Text style={styles.stateText}>{getEmptyMessage()}</Text>
+              </View>
+            }
+          />
+        </>
       )}
     </View>
   );
@@ -128,7 +196,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 14,
   },
   title: {
     fontSize: 26,
@@ -141,10 +209,24 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '500',
   },
-  metaContainer: {
+  headerRight: {
     alignItems: 'flex-end',
     justifyContent: 'center',
-    paddingTop: 6,
+    gap: 6,
+  },
+  refreshHeaderButton: {
+    backgroundColor: '#e5e7eb',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  refreshHeaderButtonPressed: {
+    backgroundColor: '#d1d5db',
+  },
+  refreshHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
   },
   listContent: {
     paddingBottom: 24,
